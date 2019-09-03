@@ -1,0 +1,502 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  VPC with InternetGateway 
+  created public subnet and associate with public route table
+  created NAT Gateway
+  created private subnet and private route table with internet access through NAT Gateway
+
+Parameters:
+  VpcName:
+    Description: Vpc name that will be prefixed to resource name
+    Type: String
+    Default: Vpc-Test
+
+  VpcCIDR:
+    Description: IP range (CIDR Notation) for this VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnetA1Cidr:
+    Description: IP range (CIDR Notation) for AvailabilityZone-A PublicSubnet-1 (NatGateway will be deployed here)
+    Type: String
+    Default: 10.0.1.0/24
+
+  PublicSubnetA2Eks1Cidr:
+    Description: IP range (CIDR Notation) for AvailabilityZone-A PublicSubnet-2 (Eks 1 will use this)
+    Type: String
+    Default: 10.0.2.0/24
+
+  PublicSubnetB1Eks1Cidr:
+    Description: IP range (CIDR Notation) for AvailabilityZone-B PublicSubnet-1 (Eks 1 will use this)
+    Type: String
+    Default: 10.0.3.0/24
+
+  PrivateSubnetA1Eks1Cidr:
+    Description: IP range (CIDR Notation) for AvailabilityZone-A PrivateSubnet-1 (Eks 1 will use this)
+    Type: String
+    Default: 10.0.4.0/24
+
+  PrivateSubnetB1Eks1Cidr:
+    Description: IP range (CIDR Notation) for AvailabilityZone-B PrivateSubnet-1 (Eks 1 will use this)
+    Type: String
+    Default: 10.0.5.0/24
+
+  Eks1ClusterName:
+    Description: EKS 1 Cluster Name
+    Type: String
+    Default: Cluster-Test-eks
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: VPC Configuration
+        Parameters:
+          - VpcName
+          - VpcCIDR
+      - Label:
+          default: Public Subnet Configuration
+        Parameters:
+          - PublicSubnetA1Cidr
+      - Label:
+          default: EKS 1 Configuration
+        Parameters:
+          - Eks1ClusterName
+          - PublicSubnetA2Eks1Cidr
+          - PublicSubnetB1Eks1Cidr
+          - PrivateSubnetA1Eks1Cidr
+          - PrivateSubnetB1Eks1Cidr
+    ParameterLabels:
+      VpcName:
+        default: VPC Name
+      VpcCIDR:
+        default: VPC IP Range (CIDR Notation)
+      PublicSubnetA1Cidr:
+        default: Public Subnet 1 in AvailabilityZone A IP Range (CIDR Notation)
+      Eks1ClusterName:
+        default: EKS 1 Cluster Name
+      PublicSubnetA2Eks1Cidr:
+        default: Public Subnet 2 in AvailabilityZone A IP Range (CIDR Notation)
+      PublicSubnetB1Eks1Cidr:
+        default: Public Subnet 1 in AvailabilityZone B IP Range (CIDR Notation)
+      PrivateSubnetA1Eks1Cidr:
+        default: Private Subnet 1 in AvailabilityZone A IP Range (CIDR Notation)
+      PrivateSubnetB1Eks1Cidr:
+        default: Private Subnet 1 in AvailabilityZone B IP Range (CIDR Notation)
+
+Resources:
+# VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${VpcName}
+      - Key: !Sub "kubernetes.io/cluster/${Eks1ClusterName}"
+        Value: 'shared'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: VPC
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub ${VpcName}-igw
+          
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    DependsOn:
+    - InternetGateway
+    - VPC
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+# NAT Gateway
+  NatGatewayA1Eip:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGatewayA1:
+    Type: AWS::EC2::NatGateway
+    DependsOn:
+    - NatGatewayA1Eip
+    - PublicSubnetA1
+    Properties:
+      AllocationId: !GetAtt NatGatewayA1Eip.AllocationId
+      SubnetId: !Ref PublicSubnetA1
+
+# Public Subnet
+  PublicSubnetA1:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnetA1Cidr
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${VpcName}-public-a1
+
+  PublicSubnetA2Eks1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnetA2Eks1Cidr
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${VpcName}-public-a2-eks-${Eks1ClusterName}
+      - Key: !Sub "kubernetes.io/cluster/${Eks1ClusterName}"
+        Value: 'shared'
+      - Key: kubernetes.io/role/elb
+        Value: '1'
+          
+  PublicSubnetB1Eks1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnetB1Eks1Cidr
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub ${VpcName}-public-b1-eks-${Eks1ClusterName}
+      - Key: !Sub "kubernetes.io/cluster/${Eks1ClusterName}"
+        Value: 'shared'
+      - Key: kubernetes.io/role/elb
+        Value: '1'
+
+# Public Route
+  PublicRouteTableA1:
+    Type: AWS::EC2::RouteTable
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub ${VpcName}-public-route-a1
+
+  PublicRouteTableA1Default:
+    Type: AWS::EC2::Route
+    DependsOn:
+    - PublicRouteTableA1
+    - InternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTableA1
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicRouteTableA1AssocPublicSubnetA1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+    - PublicRouteTableA1
+    - PublicSubnetA1
+    Properties:
+      RouteTableId: !Ref PublicRouteTableA1
+      SubnetId: !Ref PublicSubnetA1
+
+  PublicRouteTableA1AssociatePublicSubnetA2Eks1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+    - PublicRouteTableA1
+    - PublicSubnetA2Eks1
+    Properties:
+      RouteTableId: !Ref PublicRouteTableA1
+      SubnetId: !Ref PublicSubnetA2Eks1
+
+  PublicRouteTableA1AssociatePublicSubnetB1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+    - PublicRouteTableA1
+    - PublicSubnetB1Eks1
+    Properties:
+      RouteTableId: !Ref PublicRouteTableA1
+      SubnetId: !Ref PublicSubnetB1Eks1
+
+# Private Subnet
+  PrivateSubnetA1Eks1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnetA1Eks1Cidr
+      Tags:
+      - Key: !Sub "kubernetes.io/cluster/${Eks1ClusterName}"
+        Value: 'shared'
+      - Key: kubernetes.io/role/internal-elb
+        Value: '1'
+      - Key: Name
+        Value: !Sub ${VpcName}-private-a1-eks-${Eks1ClusterName}
+          
+  PrivateSubnetB1Eks1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnetB1Eks1Cidr
+      Tags:
+      - Key: !Sub "kubernetes.io/cluster/${Eks1ClusterName}"
+        Value: 'shared'
+      - Key: kubernetes.io/role/internal-elb
+        Value: '1'
+      - Key: Name
+        Value: !Sub ${VpcName}-private-b1-eks-${Eks1ClusterName}
+          
+# Private Route
+  PrivateRouteTableA1:
+    Type: AWS::EC2::RouteTable
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub ${VpcName}-private-route-a1
+
+  PrivateRouteTableA1Default:
+    Type: AWS::EC2::Route
+    DependsOn:
+    - PrivateRouteTableA1
+    - NatGatewayA1
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA1
+
+  PrivateRouteTableA1AssociatePrivateSubnetA1Eks1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+    - PrivateRouteTableA1
+    - PrivateSubnetA1Eks1
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA1
+      SubnetId: !Ref PrivateSubnetA1Eks1
+
+  PrivateRouteTableB1:
+    Type: AWS::EC2::RouteTable
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub ${VpcName}-private-route-b1
+
+  PrivateRouteTableB1Default:
+    Type: AWS::EC2::Route
+    DependsOn:
+    - PrivateRouteTableB1
+    - NatGatewayA1
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA1
+
+  PrivateRouteTableB1AssociatePrivateSubnetB1Eks1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn:
+    - PrivateRouteTableB1
+    - PrivateSubnetB1Eks1
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB1
+      SubnetId: !Ref PrivateSubnetB1Eks1
+
+# NoIngress Security Group
+  NoIngressSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC
+    Properties:
+      GroupName: "no-ingress-sg"
+      GroupDescription: "Security group with no ingress rule"
+      VpcId: !Ref VPC
+
+# Bastion Security Group
+  BastionHostSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Attached to Bastion Host and allow other resources only accessible by this Security Group
+      Tags:
+      - Key: Name
+        Value: !Sub "${VpcName}-bastion-sg"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: '0.0.0.0/0'
+
+# EKS Cluster Security Group
+  Eks1ControlPlaneSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Allowing API request from Worker Nodes & Bastion Host, and allow out going to all Worker Nodes
+      Tags:
+      - Key: Name
+        Value: !Sub "${VpcName}-eks-${Eks1ClusterName}-controlplane-sg"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        SourceSecurityGroupId: !Ref BastionHostSg
+        Description: Allow Control Plane to receive API requests from Bastion Host
+      
+  Eks1ControlPlaneSgFromEksWorkerSg:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow Control Plane to receive API requests from Worker Nodes
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref Eks1WorkerSg
+      FromPort: 443
+      ToPort: 443
+      GroupId: !Ref Eks1ControlPlaneSg
+      
+  Eks1ControlPlaneSgToEksWorkerSg:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow Control Plane only access Worker Nodes
+      IpProtocol: tcp
+      GroupId: !Ref Eks1ControlPlaneSg
+      FromPort: 443
+      ToPort: 443
+      DestinationSecurityGroupId: !Ref Eks1WorkerSg
+
+# EKS Worker Security Group
+  Eks1WorkerSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Communication between the Control Plane and Worker Nodes in group standard-workers
+      Tags:
+      - Key: !Sub "kubernetes.io/cluster/${Eks1ClusterName}"
+        Value: owned
+      - Key: Name
+        Value: !Sub "${VpcName}-eks-${Eks1ClusterName}-worker-sg"
+
+  Eks1WorkerSgFromEksWorkerSg:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow Worker Nodes interact each others using any port and protocols
+      IpProtocol: "-1"
+      SourceSecurityGroupId: !Ref Eks1WorkerSg
+      GroupId: !Ref Eks1WorkerSg
+      
+  EksWorkerSgFromEks1ControlPlaneSg:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow Control Plane to access all Worker Nodes port (allowing proxy functionality or run the CNCF conformance tests)
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref Eks1ControlPlaneSg
+      FromPort: 0
+      ToPort: 65535
+      GroupId: !Ref Eks1WorkerSg
+        
+Outputs:
+# VPC
+  VPC:
+    Description: Ref of Created VPC
+    Export: 
+      Name: !Sub ${AWS::StackName}::VPC
+    Value: !Ref VPC
+
+  VpcName:
+    Description: Ref of Created VPC
+    Export: 
+      Name: !Sub ${AWS::StackName}::VpcName
+    Value: !Ref VpcName
+    
+  InternetGateway:
+    Description: Ref of Created InternetGateway
+    Export: 
+      Name: !Sub ${AWS::StackName}::InternetGateway
+    Value: !Ref InternetGateway
+
+  AvailabilityZoneA:
+    Description: Ref of AvailabilityZone-A
+    Export: 
+      Name: !Sub ${AWS::StackName}::AvailabilityZoneA
+    Value: !Select [ 0, !GetAZs  '' ]
+    
+  AvailabilityZoneB:
+    Description: Ref of AvailabilityZone-B
+    Export: 
+      Name: !Sub ${AWS::StackName}::AvailabilityZoneB
+    Value: !Select [ 1, !GetAZs  '' ]
+    
+  AvailabilityZoneC:
+    Description: Ref of AvailabilityZone-C
+    Export: 
+      Name: !Sub ${AWS::StackName}::AvailabilityZoneC
+    Value: !Select [ 2, !GetAZs  '' ]
+
+# EKS
+  Eks1ClusterName:
+    Description: Ref of Eks 1 Cluster Name that will be used
+    Export: 
+      Name: !Sub ${AWS::StackName}::Eks1ClusterName
+    Value: !Ref Eks1ClusterName
+
+# NAT Gateway
+  NatGatewayA1:
+    Description: Ref of Created NatGateway AvailabilityZone-A
+    Export: 
+      Name: !Sub ${AWS::StackName}::NatGatewayA1
+    Value: !Ref NatGatewayA1
+
+# Public Subnet
+  PublicSubnetA1:
+    Description: Ref of AvailabilityZone-A PublicSubnet 1 
+    Export: 
+      Name: !Sub ${AWS::StackName}::PublicSubnetA1
+    Value: !Ref PublicSubnetA1
+
+  PublicSubnetA2Eks1:
+    Description: Ref of AvailabilityZone-A PublicSubnet 2 for Eks 1
+    Export: 
+      Name: !Sub ${AWS::StackName}::PublicSubnetA2Eks1
+    Value: !Ref PublicSubnetA2Eks1
+
+  PublicSubnetB1Eks1:
+    Description: Ref of AvailabilityZone-B PublicSubnet 1 for Eks 1
+    Export: 
+      Name: !Sub ${AWS::StackName}::PublicSubnetB1Eks1
+    Value: !Ref PublicSubnetB1Eks1
+    
+# Private Subnet
+  PrivateSubnetA1Eks1:
+    Description: Ref of AvailabilityZone-A PrivateSubnet 1 for Eks 1
+    Export: 
+      Name: !Sub ${AWS::StackName}::PrivateSubnetA1Eks1
+    Value: !Ref PrivateSubnetA1Eks1
+
+  PrivateSubnetB1Eks1:
+    Description: Ref of AvailabilityZone-B PrivateSubnet 1 for Eks 1
+    Export: 
+      Name: !Sub ${AWS::StackName}::PrivateSubnetB1Eks1
+    Value: !Ref PrivateSubnetB1Eks1
+        
+# Security Group
+  BastionHostSg:
+    Description: Ref of Created Bastion Host Security Group
+    Export: 
+      Name: !Sub ${AWS::StackName}::BastionHostSg
+    Value: !Ref BastionHostSg
+    
+  Eks1ControlPlaneSg:
+    Description: Ref of EKS 1 Control Plane Security Group
+    Export: 
+      Name: !Sub ${AWS::StackName}::Eks1ControlPlaneSg
+    Value: !Ref Eks1ControlPlaneSg
+    
+  Eks1WorkerSg:
+    Description: Ref of EKS 1 Worker Security Group
+    Export: 
+      Name: !Sub ${AWS::StackName}::Eks1WorkerSg
+    Value: !Ref Eks1WorkerSg
+    

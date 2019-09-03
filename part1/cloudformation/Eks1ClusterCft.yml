@@ -1,0 +1,245 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EKS Control Plane with Worker Nodes using EKS Optimized AmazonLinux2 AMI in Private Subnet
+
+Parameters:
+  VpcStackName:
+    Description: Existing VPC CloudFormation's StackName that will be deployed into
+    Type: String
+    Default: Vpc-Stack
+    
+  IamStackName:
+    Description: Existing IAM CloudFormation's StackName that will be used
+    Type: String
+    Default: Iam-Stack
+  
+  WorkerInstanceType:
+    Description: Ec2 Instance Type to be provisioned as EKS Worker Node
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.nano
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - m5.large
+      - m5.xlarge
+      - m5.2xlarge
+      - m5.4xlarge
+      - m5.12xlarge
+      - m5.24xlarge
+      - c5.large
+      - c5.xlarge
+      - c5.2xlarge
+      - c5.4xlarge
+      - c5.9xlarge
+      - c5.18xlarge
+
+  WorkerAmiOverride:
+    Description: > 
+      Ec2 Ami to be used to provision as EKS Worker Node
+      Leave it blank to be automatically filed with AWS Optimized AMI on selected Region
+      based on (https://docs.aws.amazon.com/eks/latest/userguide/eks-optimized-ami.html)
+    Type: String
+    Default: ''
+    
+  WorkerScalingGroupDesiredCapacity:
+    Description: EKS Worker Scaling Group Desired Instance capacity
+    Type: Number
+    Default: 2
+    MinValue: 2
+
+  WorkerScalingGroupMaxCapacity:
+    Description: EKS Worker Scaling Group Max Instance capacity
+    Type: Number
+    Default: 2
+    MinValue: 2
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Existing CloudFormation Stack
+        Parameters:
+          - VpcStackName
+          - IamStackName
+      - Label:
+          default: Worker Nodes Configuration
+        Parameters:
+          - WorkerInstanceType
+          - WorkerAmiOverride
+    ParameterLabels:
+      VpcStackName:
+        default: VPC Stack Name
+      IamStackName:
+        default: IAM Stack Name
+      WorkerInstanceType:
+        default: Worker Instance Type
+      WorkerAmiOverride:
+        default: Worker AMI
+
+Mappings: 
+  OptimizedWorkerAmiRegionMap: 
+    us-east-2:
+      AmiId: ami-027683840ad78d833
+    us-east-1:
+      AmiId: ami-0d3998d69ebe9b214
+    us-west-2:
+      AmiId: ami-00b95829322267382
+    ap-east-1:
+      AmiId: ami-03f8634a8fd592414
+    ap-south-1:
+      AmiId: ami-0062e5b0411e77c1a
+    ap-northeast-1:
+      AmiId: ami-0a67c71d2ab43d36f
+    ap-northeast-2:
+      AmiId: ami-0d66d2fefbc86831a
+    ap-southeast-1:
+      AmiId: ami-06206d907abb34bbc
+    ap-southeast-2:
+      AmiId: ami-09f2d86f2d8c4f77d
+    eu-central-1:
+      AmiId: ami-038bd8d3a2345061f
+    eu-west-1:
+      AmiId: ami-0199284372364b02a
+    eu-west-2:
+      AmiId: ami-0f454b09349248e29
+    eu-west-3:
+      AmiId: ami-00b44348ab3eb2c9f
+    eu-north-1:
+      AmiId: ami-02218be9004537a65
+
+Conditions:
+  WorkerAmiOverridden: !Not [ !Equals [!Ref WorkerAmiOverride, '']]
+  
+Resources:
+# Control Plane
+  ControlPlane:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name:
+        Fn::ImportValue: !Sub "${VpcStackName}::Eks1ClusterName"
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+        - Fn::ImportValue: !Sub "${VpcStackName}::Eks1ControlPlaneSg"
+        SubnetIds:
+        - Fn::ImportValue: !Sub "${VpcStackName}::PublicSubnetA2Eks1"
+        - Fn::ImportValue: !Sub "${VpcStackName}::PublicSubnetB1Eks1"
+        - Fn::ImportValue: !Sub "${VpcStackName}::PrivateSubnetA1Eks1"
+        - Fn::ImportValue: !Sub "${VpcStackName}::PrivateSubnetB1Eks1"
+        #EndpointPublicAccess: False
+        #EndpointPrivateAccess: True
+      RoleArn:
+        Fn::ImportValue: !Sub "${IamStackName}::EksServiceRoleArn"
+      Version: '1.13'   
+          
+# Worker Nodes
+  WorkerScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn: ControlPlane
+    Properties:
+      DesiredCapacity: !Sub "${WorkerScalingGroupDesiredCapacity}"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WorkerNodeLaunchTemplate
+        Version:
+          Fn::GetAtt: WorkerNodeLaunchTemplate.DefaultVersionNumber
+      MaxSize: !Sub "${WorkerScalingGroupMaxCapacity}"
+      MinSize: '2'
+      Tags:
+      - Key: Name
+        Value: !Join
+                - '-'
+                - - Fn::ImportValue: !Sub "${VpcStackName}::VpcName"
+                  - 'eks'
+                  - Fn::ImportValue: !Sub "${VpcStackName}::Eks1ClusterName"
+                  - 'worker'
+                  - 'node'
+        PropagateAtLaunch: 'true'
+      - Key: !Join
+             - ''
+             - - 'kubernetes.io/cluster/'
+               - Fn::ImportValue: !Sub "${VpcStackName}::Eks1ClusterName"
+        Value: owned
+        PropagateAtLaunch: 'true'
+      VPCZoneIdentifier:
+      - Fn::ImportValue: !Sub "${VpcStackName}::PrivateSubnetA1Eks1"
+      - Fn::ImportValue: !Sub "${VpcStackName}::PrivateSubnetB1Eks1"
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: '1'
+        MinInstancesInService: '0'
+
+  WorkerNodeLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn:
+            Fn::ImportValue: !Sub "${IamStackName}::EksWorkerInstanceProfileArn"
+        ImageId:
+          !If
+          - WorkerAmiOverridden
+          - !Sub ${WorkerAmiOverride}
+          - !FindInMap [OptimizedWorkerAmiRegionMap, !Ref "AWS::Region", "AmiId"]
+        InstanceType: !Sub ${WorkerInstanceType}
+        NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeviceIndex: 0
+          Groups:
+          - Fn::ImportValue: !Sub "${VpcStackName}::Eks1WorkerSg"
+        UserData:
+          Fn::Base64:
+            !Join
+              - "\n"
+              - - |
+                  #!/bin/bash -xe
+                  set -o xtrace
+                - !Join
+                  - " "
+                  - - "sudo /etc/eks/bootstrap.sh"
+                    - Fn::ImportValue: !Sub "${VpcStackName}::Eks1ClusterName"
+                - !Sub
+                  /opt/aws/bin/cfn-signal --exit-code $? --stack  ${AWS::StackName} --region ${AWS::Region} \
+                     --resource WorkerScalingGroup
+      LaunchTemplateName: !Join
+                          - '-'
+                          - - Fn::ImportValue: !Sub "${VpcStackName}::VpcName"
+                            - 'eks'
+                            - Fn::ImportValue: !Sub "${VpcStackName}::Eks1ClusterName"
+                            - 'worker'
+                            - 'lt'
+
+Outputs:
+  ClusterName:
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}::ClusterName"
+    Value: !Sub "${VpcStackName}::Eks1ClusterName"
+
+  ClusterARN:
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}::ClusterARN"
+    Value:
+      Fn::GetAtt: ControlPlane.Arn
+
+  ClusterCertificateAuthority:
+    Value:
+      Fn::GetAtt: ControlPlane.CertificateAuthorityData
+
+  ClusterEndpoint:
+    Export:
+      Name:
+        Fn::Sub: "${AWS::StackName}::ClusterEndpoint"
+    Value:
+      Fn::GetAtt: ControlPlane.Endpoint
+
+  FeatureNATMode:
+    Value: Single
+  FeatureLocalSecurityGroup:
+    Value: true
+  FeaturePrivateNetworking:
+    Value: false
+  FeatureSharedSecurityGroup:
+    Value: true

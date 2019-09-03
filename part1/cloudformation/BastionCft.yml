@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Linux Bastion Instance creation
+
+Parameters:
+  VpcStackName:
+    Description: Existing VPC CloudFormation's StackName that will be deployed into
+    Type: String
+    Default: Vpc-Stack
+    
+  IamStackName:
+    Description: Existing IAM CloudFormation's StackName that will be used
+    Type: String
+    Default: Iam-Stack
+
+  BastionInstanceType:
+    Description: Amazon EC2 instance type for the bastion instances
+    Type: String
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - m5.large
+    Default: t3.micro
+
+  BastionAmiOverride:
+    Description: Specify a region specific image to use for the instance
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Existing CloudFormation Stack
+        Parameters:
+          - VpcStackName
+          - IamStackName
+      - Label:
+          default: Amazon EC2 Configuration
+        Parameters:
+          - BastionInstanceType
+    ParameterLabels:
+      VpcStackName:
+        default: VPC Stack Name
+      IamStackName:
+        default: IAM Stack Name
+      BastionInstanceType:
+        default: Bastion Instance Type
+
+Mappings:
+  AwsLinux2AmiRegionMap:
+    AMI:
+      AmiId: amzn-ami-hvm-2018.03.0.20181129-x86_64-gp2
+    ap-northeast-1:
+      AmiId: ami-04b2d1589ab1d972c
+    ap-northeast-2:
+      AmiId: ami-0be3e6f84d3b968cd
+    ap-south-1:
+      AmiId: ami-0b99c7725b9484f9e
+    ap-southeast-1:
+      AmiId: ami-0fb6b6f9e81056553
+    ap-southeast-2:
+      AmiId: ami-075caa3491def750b
+    ca-central-1:
+      AmiId: ami-0a67d15f2858e33cb
+    eu-central-1:
+      AmiId: ami-026d3b3672c6e7b66
+    eu-north-1:
+      AmiId: ami-8c169ef2
+    eu-west-1:
+      AmiId: ami-0862aabda3fb488b5
+    eu-west-2:
+      AmiId: ami-0bdfa1adc3878cd23
+    eu-west-3:
+      AmiId: ami-05b93cd5a1b552734
+    sa-east-1:
+      AmiId: ami-0bb96001cf2299257
+    us-east-1:
+      AmiId: ami-035b3c7efe6d061d5
+    us-east-2:
+      AmiId: ami-02f706d959cedf892
+    us-west-1:
+      AmiId: ami-0fcdcdb074d2bac5f
+    us-west-2:
+      AmiId: ami-0f2176987ee50226e
+
+Conditions:
+  BastionAmiOverridden: !Not [ !Equals [!Ref BastionAmiOverride, '']]
+  
+Resources:
+
+  BastionScalingGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      LaunchConfigurationName: !Ref BastionLaunchConfiguration
+      VPCZoneIdentifier:
+      - Fn::ImportValue:
+          !Sub "${VpcStackName}::PublicSubnetA1"
+      MinSize: '1'
+      MaxSize: '1'
+      Cooldown: '300'
+      DesiredCapacity: '1'
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - Fn::ImportValue: !Sub "${VpcStackName}::VpcName"
+              - 'bastion'
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Count: '1'
+        Timeout: PT30M
+
+  BastionLaunchConfiguration:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+      AssociatePublicIpAddress: true
+      IamInstanceProfile:
+        Fn::ImportValue: !Sub "${IamStackName}::BastionHostProfile"
+      ImageId: !If 
+        - BastionAmiOverridden
+        - !Ref BastionAmiOverride
+        - !FindInMap 
+          - AwsLinux2AmiRegionMap
+          - !Ref 'AWS::Region'
+          - 'AmiId'
+      SecurityGroups:
+        - Fn::ImportValue:
+            !Sub "${VpcStackName}::BastionHostSg"
+      InstanceType: !Ref BastionInstanceType
+      UserData:
+        Fn::Base64:
+          !Join
+            - "\n"
+            - - |
+                #!/bin/bash -xe
+                set -o xtrace
+              - !Join
+                - ' '
+                - - for bastion_user in $(aws iam get-group --group-name
+                  - Fn::ImportValue: !Sub "${IamStackName}::BastionConnectGroup"
+                  - --query 'Users[*].{UserName:UserName}' --output text); do (adduser $bastion_user); done
+              - |
+                yum -y install ec2-instance-connect
+                mount -o remount,rw,hidepid=2 /proc
+                awk '!/proc/' /etc/fstab > temp && mv temp /etc/fstab
+                echo "proc /proc proc defaults,hidepid=2 0 0" >> /etc/fstab
+                service sshd restart
+              - |
+                curl -LO https://storage.googleapis.com/kubernetes-release/release/`curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt`/bin/linux/amd64/kubectl
+                chmod +x ./kubectl
+                mv ./kubectl /usr/local/bin/kubectl
+              - |
+                curl -o aws-iam-authenticator https://amazon-eks.s3-us-west-2.amazonaws.com/1.13.8/2019-08-14/bin/linux/amd64/aws-iam-authenticator
+                chmod +x ./aws-iam-authenticator
+                mv aws-iam-authenticator /usr/local/bin
+              - !Sub
+                /opt/aws/bin/cfn-signal --exit-code $? --stack  ${AWS::StackName} --region ${AWS::Region} --resource BastionScalingGroup
+
+Outputs:
+  BastionScalingGroup:
+    Description: Ref of Created Bastion Scaling Group
+    Export: 
+      Name: !Sub ${AWS::StackName}::BastionScalingGroup
+    Value: !Ref BastionScalingGroup

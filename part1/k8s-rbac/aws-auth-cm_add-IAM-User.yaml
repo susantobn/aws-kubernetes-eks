@@ -1,0 +1,28 @@
+# Please edit the object below. Lines beginning with a '#' will be ignored,
+# and an empty file will abort the edit. If an error occurs while saving this file will be
+# reopened with the relevant failures.
+#
+apiVersion: v1
+data:
+  mapRoles: |
+    - rolearn: arn:aws:iam::112233445566:role/Iam-Stack-EksWorkerRole-4e459250ffd0
+      username: system:node:{{EC2PrivateDNSName}}
+      groups:
+        - system:bootstrappers
+        - system:nodes
+  mapUsers: |
+    - userarn: arn:aws:iam::112233445566:user/susanto
+      username: susanto
+      groups:
+        - system:masters
+kind: ConfigMap
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","data":{"mapRoles":"- rolearn: arn:aws:iam::112233445566:role/Iam-Stack-EksWorkerRole-4e459250ffd0\n  username: system:node:{{EC2PrivateDNSName}}\n  groups:\n    - system:bootstrappers\n    - system:nodes\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"aws-auth","namespace":"kube-system"}}
+  creationTimestamp: "2019-09-02T08:07:22Z"
+  name: aws-auth
+  namespace: kube-system
+  resourceVersion: "83224"
+  selfLink: /api/v1/namespaces/kube-system/configmaps/aws-auth
+  uid: b1347f91-cd58-11e9-8fb2-025fa539f0b4

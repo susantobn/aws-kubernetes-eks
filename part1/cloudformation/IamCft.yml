@@ -1,0 +1,327 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  IAM Role, Policy and InstanceProfile creation
+
+Resources:
+# EKS Service Role
+  EksServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Role to be used by EKS Control Plane
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - eks.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonEKSServicePolicy
+      - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+
+  EksServiceRoleCloudWatchMetricPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: EksServiceRole
+    Properties:
+      #Description: Allow EksServiceRole to Put CloudWatch Metric Data
+      PolicyDocument:
+        Statement:
+        - Action:
+          - cloudwatch:PutMetricData
+          Effect: Allow
+          Resource: "*"
+        Version: '2012-10-17'
+      PolicyName: "CloudWatchMetricPolicy"
+      Roles:
+      - Ref: EksServiceRole
+
+  EksServiceRoleLoadBalancerPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: EksServiceRole
+    Properties:
+      #Description: Allow EksServiceRole to Create Security Group, Describe EC2 related information, and any action related to ELB
+      PolicyDocument:
+        Statement:
+        - Action:
+          - elasticloadbalancing:*
+          - ec2:CreateSecurityGroup
+          - ec2:Describe*
+          Effect: Allow
+          Resource: "*"
+        Version: '2012-10-17'
+      PolicyName: "LoadBalancerPolicy"
+      Roles:
+      - Ref: EksServiceRole
+
+# EKS Worker Role
+  EksWorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Role to be used by EKS Worker Node / Instance
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+      - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Path: "/"
+
+  EksWorkerRoleIngressControllerPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: EksWorkerRole
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - acm:DescribeCertificate
+          - acm:ListCertificates
+          - acm:GetCertificate
+          Effect: Allow
+          Resource: "*"
+        - Action:
+          - ec2:AuthorizeSecurityGroupIngress
+          - ec2:CreateSecurityGroup
+          - ec2:CreateTags
+          - ec2:DeleteTags
+          - ec2:DeleteSecurityGroup
+          - ec2:DescribeAccountAttributes
+          - ec2:DescribeAddresses
+          - ec2:DescribeInstances
+          - ec2:DescribeInstanceStatus
+          - ec2:DescribeInternetGateways
+          - ec2:DescribeNetworkInterfaces
+          - ec2:DescribeSecurityGroups
+          - ec2:DescribeSubnets
+          - ec2:DescribeTags
+          - ec2:DescribeVpcs
+          - ec2:ModifyInstanceAttribute
+          - ec2:ModifyNetworkInterfaceAttribute
+          - ec2:RevokeSecurityGroupIngress
+          Effect: Allow
+          Resource: "*"
+        - Action:
+          - elasticloadbalancing:AddListenerCertificates
+          - elasticloadbalancing:AddTags
+          - elasticloadbalancing:CreateListener
+          - elasticloadbalancing:CreateLoadBalancer
+          - elasticloadbalancing:CreateRule
+          - elasticloadbalancing:CreateTargetGroup
+          - elasticloadbalancing:DeleteListener
+          - elasticloadbalancing:DeleteLoadBalancer
+          - elasticloadbalancing:DeleteRule
+          - elasticloadbalancing:DeleteTargetGroup
+          - elasticloadbalancing:DeregisterTargets
+          - elasticloadbalancing:DescribeListenerCertificates
+          - elasticloadbalancing:DescribeListeners
+          - elasticloadbalancing:DescribeLoadBalancers
+          - elasticloadbalancing:DescribeLoadBalancerAttributes
+          - elasticloadbalancing:DescribeRules
+          - elasticloadbalancing:DescribeSSLPolicies
+          - elasticloadbalancing:DescribeTags
+          - elasticloadbalancing:DescribeTargetGroups
+          - elasticloadbalancing:DescribeTargetGroupAttributes
+          - elasticloadbalancing:DescribeTargetHealth
+          - elasticloadbalancing:ModifyListener
+          - elasticloadbalancing:ModifyLoadBalancerAttributes
+          - elasticloadbalancing:ModifyRule
+          - elasticloadbalancing:ModifyTargetGroup
+          - elasticloadbalancing:ModifyTargetGroupAttributes
+          - elasticloadbalancing:RegisterTargets
+          - elasticloadbalancing:RemoveListenerCertificates
+          - elasticloadbalancing:RemoveTags
+          - elasticloadbalancing:SetIpAddressType
+          - elasticloadbalancing:SetSecurityGroups
+          - elasticloadbalancing:SetSubnets
+          - elasticloadbalancing:SetWebACL
+          Effect: Allow
+          Resource: "*"
+        - Action:
+          - iam:CreateServiceLinkedRole
+          - iam:GetServerCertificate
+          - iam:ListServerCertificates
+          Effect: Allow
+          Resource: "*"
+        - Action:
+          - waf-regional:GetWebACLForResource
+          - waf-regional:GetWebACL
+          - waf-regional:AssociateWebACL
+          - waf-regional:DisassociateWebACL
+          Effect: Allow
+          Resource: "*"
+        - Action:
+          - tag:GetResources
+          - tag:TagResources
+          Effect: Allow
+          Resource: "*"
+        - Action:
+          - waf:GetWebACL
+          Effect: Allow
+          Resource: "*"
+        Version: '2012-10-17'
+      PolicyName: "IngressControllerPolicy"
+      Roles:
+      - Ref: EksWorkerRole
+
+# EKS Worker Profile
+  EksWorkerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    DependsOn: EksWorkerRole
+    Properties:
+      Path: "/"
+      Roles:
+      - Ref: EksWorkerRole
+
+# EKS Access Group
+  EksAccessGroup:
+    Type: AWS::IAM::Group
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}-eks-group-EksAccessGroup"
+
+  EksAccessGroupEksClusterPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: EksAccessGroup
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - eks:DescribeCluster
+          Effect: Allow
+          Resource: !Sub "arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/*"
+        Version: '2012-10-17'
+      PolicyName: "EksClusterPolicy"
+      Groups:
+      - !Ref EksAccessGroup
+      
+# Bastion Host Role
+  BastionHostRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Effect: Allow
+        Version: 2012-10-17
+
+  BastionHostRoleIamGroupPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn:
+    - BastionHostRole
+    - BastionConnectGroup
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - iam:GetGroup
+          Effect: Allow
+          Resource:
+            Fn::GetAtt: BastionConnectGroup.Arn
+        Version: '2012-10-17'
+      PolicyName: "IamGroupPolicy"
+      Roles:
+      - Ref: BastionHostRole
+      
+  BastionHostProfile:
+    DependsOn: BastionHostRole
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+      - Ref: BastionHostRole
+      Path: /
+
+  BastionConnectGroup:
+    Type: AWS::IAM::Group
+    Properties: 
+      GroupName: !Sub "${AWS::StackName}-bastion-group-BastionConnectGroup"
+
+  BastionConnectGroupInstanceConnectPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: BastionConnectGroup
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - ec2-instance-connect:SendSSHPublicKey
+          Effect: Allow
+          Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+          Condition:
+            StringEquals:
+              ec2:osuser: "${aws:username}"
+        Version: '2012-10-17'
+      PolicyName: "InstanceConnectPolicy"
+      Groups:
+      - !Ref BastionConnectGroup
+
+Outputs:
+# EKS Service Role
+  EksServiceRole:
+    Description: Ref of Created EKS Service Role
+    Export: 
+      Name: !Sub ${AWS::StackName}::EksServiceRole
+    Value:
+      Ref: EksServiceRole
+
+  EksServiceRoleArn:
+    Description: Ref of Created EKS Service Role Arn
+    Export: 
+      Name: !Sub ${AWS::StackName}::EksServiceRoleArn
+    Value:
+      Fn::GetAtt: EksServiceRole.Arn
+
+# EKS Access Role
+  EksAccessGroupArn:
+    Description: Ref of Created EKS Access Role Arn
+    Export: 
+      Name: !Sub ${AWS::StackName}::EksAccessGroupArn
+    Value:
+      Fn::GetAtt: EksAccessGroup.Arn
+      
+# EKS Worker Role
+  EksWorkerInstanceProfileArn:
+    Description: Ref of Created EKS Worker InstanceProfile Arn
+    Export:
+      Name: !Sub "${AWS::StackName}::EksWorkerInstanceProfileArn"
+    Value:
+      Fn::GetAtt: EksWorkerInstanceProfile.Arn
+      
+  EksWorkerRoleArn:
+    Description: Ref of Created EKS Worker Role Arn
+    Export:
+      Name: !Sub "${AWS::StackName}::EksWorkerRoleArn"
+    Value:
+      Fn::GetAtt: EksWorkerRole.Arn
+
+# Bastion Host Role
+  BastionHostRole:
+    Description: Ref of Created Bastion Host Role
+    Export: 
+      Name: !Sub ${AWS::StackName}::BastionHostRole
+    Value:
+      Ref: BastionHostRole
+
+  BastionHostProfile:
+    Description: Ref of Created Bastion Host Profile
+    Export:
+      Name: !Sub "${AWS::StackName}::BastionHostProfile"
+    Value:
+      Fn::GetAtt: BastionHostProfile.Arn
+  
+  BastionConnectGroup:
+    Description: Ref of Created Bastion Connect IAM Group
+    Export: 
+      Name: !Sub ${AWS::StackName}::BastionConnectGroup
+    Value:
+      Ref: BastionConnectGroup
